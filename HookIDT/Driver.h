@@ -1,3 +1,4 @@
+#include <ntifs.h>
 #include <ntddk.h>
 #include <wdf.h>
 
@@ -7,13 +8,16 @@
 typedef	USHORT	WORD;
 typedef	ULONG	DWORD;
 
+typedef NTSTATUS (__stdcall *KeSetAffinityThreadPtr)(PKTHREAD thread, KAFFINITY affinity);
+
 #define SYSTEM_SERVICE_VECTOR 0x2e
+#define MAX_NUMBER_OF_CPUS sizeof(KAFFINITY)
 
 // nonstandard extension used : bit field types other than int
 #pragma warning(disable: 4214)
-#pragma warning(disable: 4127)
 // unreferenced formal parameter
 #pragma warning(disable: 4100)
+#pragma warning(disable: 4055)
 
 #pragma pack(1)
 typedef struct _IDT_DESCRIPTOR
@@ -28,7 +32,7 @@ typedef struct _IDT_DESCRIPTOR
 	BYTE DPL:2;			//Bits[13,14] DPL - descriptor privilege level
 	BYTE P:1;			//Bits[15,15] Segment present flag (normally set)
 	WORD offset16_31;	//Bits[16,32] offset address bits [16,31]
-}IDT_DESCRIPTOR,  *PIDT_DESCRIPTOR; 
+}IDT_DESCRIPTOR, *PIDT_DESCRIPTOR; 
 #pragma pack()
 
 #pragma pack(1)
@@ -39,14 +43,5 @@ typedef struct _IDTR
 	WORD baseAddressHi;	//Bits[32,47] hi-order bytes of base address
 }IDTR;
 #pragma pack()
-
-__inline DWORD makeDWORD(WORD hi, WORD lo)
-{
-	DWORD value = 0;
-	value = value | (DWORD)hi;
-	value <<= 16;
-	value = value | (DWORD)lo;
-	return value;
-}
 
 #endif

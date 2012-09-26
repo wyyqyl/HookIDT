@@ -84,8 +84,8 @@ KmdfLibraryVersion = $KMDFVERSION$
 
 [Strings]
 SPSVCINST_ASSOCSERVICE= 0x00000002
-ManufacturerName="" ; TODO: add ManufacturerName
-ClassName="Samples" ; TODO: edit ClassName
+ManufacturerName="Yorath" ; TODO: add ManufacturerName
+ClassName="HookSeries" ; TODO: edit ClassName
 DiskName = "HookIDT Installation Disk"
 HookIDT.DeviceDesc = "HookIDT Device"
 HookIDT.SVCDESC = "HookIDT Service"

@@ -4,169 +4,124 @@ DRIVER_INITIALIZE DriverEntry;
 EVT_WDF_DRIVER_DEVICE_ADD HookIDTEvtDeviceAdd;
 EVT_WDF_DRIVER_UNLOAD HookIDTEvtDriverUnload;
 
-KEVENT syncEvent;
-volatile LONG nIDTHooked;
-volatile LONG nIDTUnhooked;
-LONG nProcessors;
-PIDT_DESCRIPTOR idt2e;
-DWORD oldIdt2ePtr;
+PIDT_DESCRIPTOR idt2eAddr[MAX_NUMBER_OF_CPUS];
+DWORD originalIDT2eISR;
 
 void logSystemCall(DWORD dispatchID, DWORD stackPtr)
 {
 	KdPrint(("[RegisterSystemCall]: on CPU[%u] of %u, (%s, pid=%u, dispatchID=0x%x)\n",
-		KeGetCurrentProcessorNumber(), KeNumberProcessors, (BYTE *)PsGetCurrentProcess() + 0x16C, PsGetCurrentProcessId(), dispatchID));
+		KeGetCurrentProcessorNumber() + 1, KeNumberProcessors, (BYTE *)PsGetCurrentProcess() + 0x16C, PsGetCurrentProcessId(), dispatchID));
 }
 
 __declspec(naked) void KiSystemServiceHook()
 {
 	__asm
 	{
+		// Before calling kernel functions,
+		// fs should be set to 0x30
 		pushad;
 		pushfd;
 		push fs;
 		mov bx, 0x30;
 		mov fs, bx;
-		push ds;
-		push es;
-
+				
 		push edx;
 		push eax;
 		call logSystemCall;
 
-		pop es;
-		pop ds;
 		pop fs;
 		popfd;
 		popad;
 
-		jmp oldIdt2ePtr;
+		jmp originalIDT2eISR;
 	}
 }
 
-void HookInt2E()
+DWORD makeDWORD(WORD hi, WORD lo)
 {
-	DWORD dwISRAddress;
-
-	KdPrint(("[HookInt2E]\n"));
-
-	dwISRAddress = makeDWORD(idt2e->offset16_31, idt2e->offset00_15);
-	if (dwISRAddress == (DWORD)KiSystemServiceHook)
-	{
-		KdPrint(("Processor[%d] is hooked already\n", KeGetCurrentProcessorNumber()));
-		KeSetEvent(&syncEvent, 0, FALSE);
-		PsTerminateSystemThread(0);
-	}
-
-	__asm
-	{
-		cli;
-		lea eax, KiSystemServiceHook;
-		mov ebx, idt2e;
-
-		mov [ebx], ax;
-		shr eax, 16;
-		mov [ebx+6], ax;
-		sti;
-	}
-	KdPrint(("Processor[%d] is hooked\n", KeGetCurrentProcessorNumber()));
-	InterlockedIncrement(&nIDTHooked);
-	KeSetEvent(&syncEvent, 0, FALSE);
-	PsTerminateSystemThread(0);
+	DWORD value = 0;
+	value = value | (DWORD)hi;
+	value <<= 16;
+	value = value | (DWORD)lo;
+	return value;
 }
 
-void HookAllCPUs()
+void HookCPU(DWORD dwProcAddress)
 {
-	PIDT_DESCRIPTOR idt;
+	DWORD dwIndex;
+	PKTHREAD pkThread;
+	KAFFINITY cpuBitMap;
+	UNICODE_STRING usKeSetAffinityThread;
+	KeSetAffinityThreadPtr KeSetAffinityThread;
+
+	KdPrint(("[HookCPU]\n"));
+
+	pkThread = KeGetCurrentThread();
+	cpuBitMap = KeQueryActiveProcessors();
+	RtlInitUnicodeString(&usKeSetAffinityThread, L"KeSetAffinityThread");
+	KeSetAffinityThread = (KeSetAffinityThreadPtr)MmGetSystemRoutineAddress(&usKeSetAffinityThread);
+
+	for (dwIndex = 0; dwIndex < MAX_NUMBER_OF_CPUS; ++dwIndex)
+	{
+		KAFFINITY currentCPU = cpuBitMap & (1 << dwIndex);
+		if (currentCPU != 0)
+		{
+			IDTR idtr;
+			PIDT_DESCRIPTOR idt;
+			DWORD idt2e;
+
+			KeSetAffinityThread(pkThread, currentCPU);
+
+			if (idt2eAddr[dwIndex] == 0)
+			{
+				__asm sidt idtr
+				idt = (PIDT_DESCRIPTOR)makeDWORD(idtr.baseAddressHi, idtr.baseAddressLo);
+				idt2eAddr[dwIndex] = idt + SYSTEM_SERVICE_VECTOR;
+				if (originalIDT2eISR == 0)
+					originalIDT2eISR = makeDWORD(idt2eAddr[dwIndex]->offset16_31, idt2eAddr[dwIndex]->offset00_15);
+				KdPrint(("IDT: 0x%08X, originalIDT2eISR: 0x%08X\n", (DWORD)idt, originalIDT2eISR));
+			}
+			idt2e = (DWORD)idt2eAddr[dwIndex];
+
+			__asm
+			{
+				cli;
+				mov eax, dwProcAddress;
+				mov ebx, idt2e;
+
+				mov [ebx], ax;
+				shr eax, 16;
+				mov [ebx+6], ax;
+				sti;
+			}
+			KdPrint(("Processor[%d] is hooked, dwProcAddress: 0x%08X\n", dwIndex + 1, dwProcAddress));
+		}
+	}
+	KeSetAffinityThread(pkThread, cpuBitMap);
+	PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+void HookInt2E(DWORD dwProcAddress)
+{
 	HANDLE hThread;
-	IDTR idtr;
+	CLIENT_ID cid;
+	PVOID pThread;
 
-	KdPrint(("[HookAllCPUs]\n"));
-
-	nProcessors = KeNumberProcessors;
-	__asm
-	{
-		cli;
-		sidt idtr;
-		sti;
-	}
-	idt = (PIDT_DESCRIPTOR)makeDWORD(idtr.baseAddressHi, idtr.baseAddressLo);
-	idt2e = &idt[SYSTEM_SERVICE_VECTOR];
-	oldIdt2ePtr = makeDWORD(idt2e->offset16_31, idt2e->offset00_15);
-
-	KdPrint(("IDT: 0x%08X, OldIDT2ePtr: 0x%08X\n", (DWORD)idt, oldIdt2ePtr));
 	KdPrint(("Start hooking...\n"));
 
-	nIDTHooked = 0;
-	KeInitializeEvent(&syncEvent, SynchronizationEvent, FALSE);
-
-	#pragma warning(disable: 4127)
-	while (TRUE)
+	PsCreateSystemThread(&hThread, 0L, NULL, NULL, &cid, (PKSTART_ROUTINE)HookCPU, (PVOID)dwProcAddress);
+	if (hThread)
 	{
-		PsCreateSystemThread(&hThread, (ACCESS_MASK)0L, NULL, NULL, NULL, (PKSTART_ROUTINE)HookInt2E, NULL);
-		KeWaitForSingleObject(&syncEvent, Executive, KernelMode, FALSE, NULL);
-		if (nIDTHooked == nProcessors)
-			break;
+		PsLookupThreadByThreadId(cid.UniqueThread, (PETHREAD *)&pThread);
+		KeWaitForSingleObject(pThread, Executive, KernelMode, FALSE, NULL);
+		ZwClose(hThread);
+		KdPrint(("Hook is done.\n"));
 	}
-	KdPrint(("Hook is done.\n"));
-	KeSetEvent(&syncEvent, 0, FALSE);
-}
-
-void UnhookInt2E()
-{
-	DWORD dwISRAddress;
-
-	KdPrint(("[UnhookInt2E]\n"));
-
-	dwISRAddress = makeDWORD(idt2e->offset16_31, idt2e->offset00_15);
-	if (dwISRAddress == oldIdt2ePtr)
-	{
-		KdPrint(("Processor[%d] is unhooked already\n", KeGetCurrentProcessorNumber()));
-		KeSetEvent(&syncEvent, 0, FALSE);
-		PsTerminateSystemThread(0);
-	}
-
-	__asm
-	{
-		cli;
-		mov eax, oldIdt2ePtr;
-		mov ebx, idt2e;
-
-		mov [ebx], ax;
-		shr eax, 16;
-		mov [ebx+6], ax;
-		sti;
-	}
-	KdPrint(("Processor[%d] is unhooked\n", KeGetCurrentProcessorNumber()));
-	InterlockedIncrement(&nIDTUnhooked);
-	KeSetEvent(&syncEvent, 0, FALSE);
-	PsTerminateSystemThread(0);
-}
-
-void UnhookAllCPUs()
-{
-	HANDLE hThread;
-
-	KdPrint(("[UnhookAllCPUs]\n"));
-
-	KdPrint(("Start unhooking...\n"));
-
-	nIDTUnhooked = 0;
-	KeInitializeEvent(&syncEvent, SynchronizationEvent, FALSE);
-
-	while (TRUE)
-	{
-		PsCreateSystemThread(&hThread, (ACCESS_MASK)0L, NULL, NULL, NULL, (PKSTART_ROUTINE)UnhookInt2E, NULL);
-		KeWaitForSingleObject(&syncEvent, Executive, KernelMode, FALSE, NULL);
-		if (nIDTUnhooked == nProcessors)
-			break;
-	}
-	KdPrint(("Unhook is done.\n"));
-	KeSetEvent(&syncEvent, 0, FALSE);
 }
 
 void HookIDTEvtDriverUnload(WDFDRIVER Driver)
 {
-	UnhookAllCPUs();
+	HookInt2E(originalIDT2eISR);
 }
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
@@ -179,7 +134,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 	config.EvtDriverUnload = HookIDTEvtDriverUnload;
 	status = WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &config, WDF_NO_HANDLE);
 
-	HookAllCPUs();
+	HookInt2E((DWORD)KiSystemServiceHook);
 
 	return status;
 }
