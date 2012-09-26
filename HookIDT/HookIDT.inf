@@ -1,0 +1,91 @@
+;
+; HookIDT.inf
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=Sample ; TODO: edit Class
+ClassGuid={78A1C341-4539-11d3-B88D-00C04FAD5171} ; TODO: edit ClassGuid
+Provider=%ManufacturerName%
+CatalogFile=HookIDT.cat
+DriverVer= ; TODO: set DriverVer in stampinf property pages
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+; ================= Class section =====================
+
+[ClassInstall32]
+Addreg=SampleClassReg
+
+[SampleClassReg]
+HKR,,,0,%ClassName%
+HKR,,Icon,,-5
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+HookIDT.sys  = 1,,
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%HookIDT.DeviceDesc%=HookIDT_Device, Root\HookIDT ; TODO: edit hw-id
+
+[HookIDT_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+HookIDT.sys
+
+;-------------- Service installation
+[HookIDT_Device.NT.Services]
+AddService = HookIDT,%SPSVCINST_ASSOCSERVICE%, HookIDT_Service_Inst
+
+; -------------- HookIDT driver install sections
+[HookIDT_Service_Inst]
+DisplayName    = %HookIDT.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\HookIDT.sys
+LoadOrderGroup = Extended Base
+
+;
+;--- HookIDT_Device Coinstaller installation ------
+;
+
+[DestinationDirs]
+HookIDT_Device_CoInstaller_CopyFiles = 11
+
+[HookIDT_Device.NT.CoInstallers]
+AddReg=HookIDT_Device_CoInstaller_AddReg
+CopyFiles=HookIDT_Device_CoInstaller_CopyFiles
+
+[HookIDT_Device_CoInstaller_AddReg]
+HKR,,CoInstallers32,0x00010000, "WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll,WdfCoInstaller"
+
+[HookIDT_Device_CoInstaller_CopyFiles]
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll
+
+[SourceDisksFiles]
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll=1 ; make sure the number matches with SourceDisksNames
+
+[HookIDT_Device.NT.Wdf]
+KmdfService =  HookIDT, HookIDT_wdfsect
+[HookIDT_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ManufacturerName="" ; TODO: add ManufacturerName
+ClassName="Samples" ; TODO: edit ClassName
+DiskName = "HookIDT Installation Disk"
+HookIDT.DeviceDesc = "HookIDT Device"
+HookIDT.SVCDESC = "HookIDT Service"

@@ -1,0 +1,1 @@
+This project is used to Hook IDT entry 0x2e: KiSystemService, it supports multi-processors.
